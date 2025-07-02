@@ -1,0 +1,162 @@
+/**
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This file is a part of the CANN Open Software.
+ * Licensed under CANN Open Software License Agreement Version 1.0 (the
+ * "License"). Please refer to the License for details. You may not use this
+ * file except in compliance with the License. THIS SOFTWARE IS PROVIDED ON AN
+ * "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS
+ * FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
+ * for the full text of the License.
+ * =================================================================================================================
+ * CANN Open Software License Agreement Version 1.0
+ *
+ * This CANN Open Software License Agreement Version 1.0 (hereinafter referred
+ * to as this "Agreement") is a legal agreement between you and Huawei, and it
+ * governs your use, modification, or distribution of CANN Open Software
+ * (hereinafter referred to as "Software"). Please read this Agreement
+ * carefully.
+ *
+ * If you are entering into this Agreement on behalf of a company or other legal
+ * entity, you represent that you have the legal authority to bind that entity
+ * to this Agreement, in which case "you" will mean the entity you represent.
+ *
+ * BY DOWNLOADING, INSTALLING, OR USING THE SOFTWARE, YOU AGREE YOU HAVE FULLY
+ * UNDERSTOOD AND ACCEPTED THE TERMS CONTAINED HEREIN. IF YOU DO NOT AGREE TO
+ * ANY OF THE TERMS OF THIS AGREEMENT, OR IF YOU DO NOT QUALIFY FOR AGREEING TO
+ * THIS AGREEMENT, YOU ARE NOT AUTHORIZED TO AND SHALL NOT DOWNLOAD, INSTALL, OR
+ * MAKE ANY USE OF THE SOFTWARE.
+ *
+ * 1. Definition
+ *
+ * 1.1   Software means the APIs, source code files, binaries, and related
+ * documents of Compute Architecture for Neural Networks("CANN") that are
+ * licensable by Huawei, and provided and licensed under this Agreement.
+ *
+ * 1.2   Ascend processors means the chipsets branded with "Ascend" that are
+ * manufactured and supplied by Huawei.
+ *
+ * 2.  Grant of Intellectual Property Rights
+ * Subject to the terms and conditions of this Agreement, including your full
+ * compliance thereof, Huawei hereby grants you a limited, worldwide,
+ * royalty-free, non-transferable, non-sublicensable, and revocable license for
+ * you to (i) download, use, modify, integrate, and distribute the Software or
+ * its derivative works for the purpose of developing software solely for use
+ * with Ascend processors, and (ii) distribute the software developed under (i)
+ * solely for use with Ascend processors.
+ *
+ * 3.  Restrictions
+ * 3.1 You are not authorized to, and shall not use, modify, or distribute this
+ * Software or its derivative works for any purpose except those expressly
+ * permitted by this Agreement. You shall not make any use of the Software or
+ * its derivative works to develop or distribute software for use in systems
+ * with processors other than Ascend processors.
+ *
+ * 3.2 You are not authorized to, and shall not remove, obscure, or alter any
+ * copyright or other notices in this Software or any part of it.
+ *
+ * 3.3 Distribution Restrictions.
+ * You may distribute the Software or its derivative works in any medium,
+ * whether in source or executable forms, provided that you comply with the
+ * purpose restriction stipulated in Section 2, provide recipients with a copy
+ * of this Agreement, and retain all notices in the Software.
+ *
+ * 4. Disclaimer of Warranty and Limitation of Liability
+ * THE SOFTWARE IS PROVIDED WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ * IMPLIED. IN NO EVENT SHALL HUAWEI OR ANY OTHER COPYRIGHT HOLDER BE LIABLE TO
+ * YOU FOR ANY DAMAGES, INCLUDING, BUT NOT LIMITED TO ANY DIRECT, OR INDIRECT,
+ * SPECIAL OR CONSEQUENTIAL DAMAGES ARISING FROM YOUR USE OR INABILITY TO USE
+ * THE SOFTWARE, IN WHOLE OR IN PART, NO MATTER HOW IT’S CAUSED OR THE LEGAL
+ * THEORY IT IS BASED ON, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+ *
+ * 5. Termination
+ * 5.1 This Agreement will continue to apply until terminated by either you or
+ * Huawei as described below: a．You may terminate this Agreement by ceasing
+ * your use of the Software; b.  Huawei may at any time, terminate this
+ * Agreement if: (i) you fail to comply with any term of this Agreement; or (ii)
+ * you directly or indirectly initiate any legal proceeding against any
+ * individual or entity by alleging that the Software or any part of it
+ * infringes your intellectual property rights.
+ *
+ * 5.2 By termination, all the rights granted to you under this Agreement are
+ * terminated, and you shall cease to use and delete this Software or its
+ * derivative works immediately.
+ *
+ * 6. MISCELLANEOUS
+ * If the application of any provision of this Agreement to any particular facts
+ * or circumstances is held to be invalid or unenforceable by a court of
+ * competent jurisdiction, then (a) the validity and enforceability of such
+ * provision as applied to any other particular facts or circumstances and the
+ * validity of other provisions of this Agreement shall not in any way be
+ * affected or impaired thereby and (b) such provision shall be enforced to the
+ * maximum extent possible so as to affect the intent of the you and Huawei and
+ * reformed without further action by you and Huawei to the extent necessary to
+ * make such provision valid and enforceable.
+ *
+ * END OF THE TERMS AND CONDITIONS
+ */
+
+/*!
+ * \file grouped_matmul.cpp
+ * \brief
+ */
+
+#include "grouped_matmul_antiquant.h"
+#include "grouped_matmul.h"
+#include "grouped_matmul_utils.h"
+#include "kernel_operator.h"
+
+using namespace AscendC;
+using namespace matmul;
+using namespace GROUPED_MATMUL;
+
+constexpr CubeFormat wFormat = CubeFormat::ND;
+constexpr MatmulConfig matmulCFG = CFG_MDL;
+
+template <bool trans = false>
+using xType =
+    MatmulType<AscendC::TPosition::GM, CubeFormat::ND, DTYPE_X, trans>;
+
+template <bool trans = false>
+using weightType = MatmulType<AscendC::TPosition::GM, wFormat, DTYPE_X, trans>;
+
+using yType = MatmulType<AscendC::TPosition::GM, CubeFormat::ND, MM_DTYPE_Y>;
+
+using biasType = MatmulType<AscendC::TPosition::GM, CubeFormat::ND, DTYPE_BIAS>;
+
+#define GMM_IMP(computeClass, processClass, sync, cfg)                         \
+    do {                                                                       \
+        using matmulType =                                                     \
+            MMType<xType<false>, weightType<false>, yType, biasType, cfg>;     \
+        matmulType::MT mm;                                                     \
+        GET_TILING_DATA_MEMBER(GMMAntiquantTilingData, gmmBaseParams,          \
+                               gmmBaseParams_, tiling);                        \
+        GET_TILING_DATA_MEMBER(GMMAntiquantTilingData, mmTilingData,           \
+                               mmTilingData_, tiling);                         \
+        REGIST_MATMUL_OBJ(&tPipe, GetSysWorkSpacePtr(), mm, &mmTilingData_);   \
+        computeClass<matmulType, sync> computeOp(mm);                          \
+        computeOp.Init(x, weight, nullptr, nullptr, nullptr, antiquant_scale,  \
+                       antiquant_offset, group_list, nullptr, y, user1,        \
+                       &gmmBaseParams_, &mmTilingData_, &tPipe);               \
+        processClass<decltype(computeOp)> op(computeOp);                       \
+        op.Init(&gmmBaseParams_, &mmTilingData_, group_list, tiling);          \
+        op.Process();                                                          \
+    } while (0)
+
+extern "C" __global__ __aicore__ void
+grouped_matmul_antiquant(GM_ADDR x, GM_ADDR weight, GM_ADDR antiquant_scale,
+                         GM_ADDR antiquant_offset, GM_ADDR group_list,
+                         GM_ADDR y, GM_ADDR workspace, GM_ADDR tiling) {
+    TPipe tPipe;
+    AscendCUtils::SetOverflow(1);
+    KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);
+    GM_ADDR user1 = GetUserWorkspace(workspace);
+    if (TILING_KEY_IS(0)) {
+        KERNEL_TASK_TYPE(0, KERNEL_TYPE_MIX_AIC_1_2);
+        GMM_IMP(GMMAntiquantComputeNorm, GMMAntiquantProcess, false, matmulCFG);
+    } else if (TILING_KEY_IS(3)) { // antiquant performence
+        KERNEL_TASK_TYPE(3, KERNEL_TYPE_MIX_AIC_1_2);
+        GMM_IMP(GMMAntiquantComputePerformance, GMMAntiquantProcess, false,
+                matmulCFG);
+    }
+}
