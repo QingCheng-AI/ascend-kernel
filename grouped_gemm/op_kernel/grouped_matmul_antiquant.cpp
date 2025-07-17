@@ -101,8 +101,8 @@
  * \brief
  */
 
-#include "grouped_matmul_antiquant.h"
 #include "grouped_matmul.h"
+#include "grouped_matmul_antiquant.h"
 #include "grouped_matmul_utils.h"
 #include "kernel_operator.h"
 

@@ -186,6 +186,50 @@ __aicore__ inline void preCastFP4Weight(const LocalTensor<SrcType> &src,
     ResetMask();
 }
 
+template <typename SrcType>
+__aicore__ inline void preCastFP8Weight(const LocalTensor<SrcType> &src,
+                                        const LocalTensor<uint8_t> &tmpBuff,
+                                        const LocalTensor<int16_t> &dst,
+                                        const uint32_t tensorSize) {
+    UnaryRepeatParams s82f16unaryParam;
+    s82f16unaryParam.srcRepStride = (ONE_REPEAT_BYTES / 2) / ONE_BLOCK_SIZE;
+    UnaryRepeatParams f162i16unaryParam;
+    BinaryRepeatParams f162f16binaryParam;
+    f162f16binaryParam.src1RepStride = 0;
+    SetMaskCount();
+    SetVectorMask<half, MaskMode::COUNTER>(0, tensorSize);
+    Cast<half, SrcType, false>(dst.template ReinterpretCast<half>(), src,
+                               RoundMode::CAST_NONE, MASK_PLACEHOLDER,
+                               REPEAT_PLACE_HOLDER, s82f16unaryParam);
+    PipeBarrier<PIPE_V>();
+    Cast<int16_t, half, false>(dst, dst.template ReinterpretCast<half>(),
+                               RoundMode::CAST_RINT, MASK_PLACEHOLDER,
+                               REPEAT_PLACE_HOLDER, f162i16unaryParam);
+    PipeBarrier<PIPE_V>();
+    ShiftLeft<int16_t, false>(dst, dst, 7, MASK_PLACEHOLDER,
+                              REPEAT_PLACE_HOLDER, f162i16unaryParam);
+    PipeBarrier<PIPE_V>();
+    Duplicate<uint16_t>(tmpBuff.template ReinterpretCast<uint16_t>(), 0xBFFF,
+                        ONE_REPEAT_BYTES / 2);
+    PipeBarrier<PIPE_V>();
+    And<uint16_t, false>(dst.template ReinterpretCast<uint16_t>(),
+                         dst.template ReinterpretCast<uint16_t>(),
+                         tmpBuff.template ReinterpretCast<uint16_t>(),
+                         MASK_PLACEHOLDER, tensorSize / 128,
+                         f162f16binaryParam);
+    PipeBarrier<PIPE_V>();
+    Duplicate<uint16_t>(tmpBuff.template ReinterpretCast<uint16_t>(), 0x5C00,
+                        ONE_REPEAT_BYTES / 2);
+    PipeBarrier<PIPE_V>();
+    Mul<half, false>(dst.template ReinterpretCast<half>(),
+                     dst.template ReinterpretCast<half>(),
+                     tmpBuff.template ReinterpretCast<half>(), MASK_PLACEHOLDER,
+                     tensorSize / 128, f162f16binaryParam);
+    PipeBarrier<PIPE_V>();
+    SetMaskNorm();
+    ResetMask();
+}
+
 __aicore__ inline void
 preCastHalfWeight(const LocalTensor<half> &src, const LocalTensor<uint8_t> &dst,
                   const UnaryRepeatParams &f162f32unaryParams,
@@ -219,16 +263,54 @@ __aicore__ inline void antiquantProcess(
     SetVectorMask<float, MaskMode::COUNTER>(0, tensorSize / 64 * 65);
     Cast<bfloat16_t, float, false>(
         dst.template ReinterpretCast<bfloat16_t>(),
-        weightTmpBuffer.template ReinterpretCast<float>(),
-        RoundMode::CAST_ROUND, MASK_PLACEHOLDER, REPEAT_PLACE_HOLDER,
-        f322f16unaryParams);
+        weightTmpBuffer.template ReinterpretCast<float>(), RoundMode::CAST_RINT,
+        MASK_PLACEHOLDER, REPEAT_PLACE_HOLDER, f322f16unaryParams);
     PipeBarrier<PIPE_V>();
     SetMaskNorm();
     ResetMask();
 }
 
-template <typename SrcType, typename DstType, typename ScaleType>
-__aicore__ inline void AntiQuant2(const LocalTensor<SrcType> &src,
+template <typename SrcType, typename DstType>
+__aicore__ inline void
+antiquantProcess(const LocalTensor<DstType> &dst, const float scale,
+                 const LocalTensor<uint8_t> &weightTmpBuffer,
+                 const LocalTensor<uint8_t> &scaleTmpBuffer,
+                 const int32_t tensorSize) {
+
+    UnaryRepeatParams f162f32unaryParam;
+    f162f32unaryParam.srcRepStride = ONE_REPEAT_BLOCKS / 2;
+    UnaryRepeatParams f322f16unaryParam;
+    f322f16unaryParam.dstRepStride = ONE_REPEAT_BLOCKS / 2;
+    BinaryRepeatParams f32binaryParam;
+    f32binaryParam.src1RepStride = 0;
+    SetMaskCount();
+    SetVectorMask<float, MaskMode::COUNTER>(0, tensorSize);
+    Cast<float, half, false>(weightTmpBuffer.template ReinterpretCast<float>(),
+                             dst.template ReinterpretCast<half>(),
+                             RoundMode::CAST_NONE, MASK_PLACEHOLDER,
+                             REPEAT_PLACE_HOLDER, f162f32unaryParam);
+    PipeBarrier<PIPE_V>();
+    Duplicate<float>(scaleTmpBuffer.template ReinterpretCast<float>(), scale,
+                     ONE_REPEAT_BYTES / 4);
+    PipeBarrier<PIPE_V>();
+    SetMaskCount();
+    SetVectorMask<float, MaskMode::COUNTER>(0, tensorSize);
+    Mul<float, false>(weightTmpBuffer.template ReinterpretCast<float>(),
+                      weightTmpBuffer.template ReinterpretCast<float>(),
+                      scaleTmpBuffer.template ReinterpretCast<float>(),
+                      MASK_PLACEHOLDER, REPEAT_PLACE_HOLDER, f32binaryParam);
+    PipeBarrier<PIPE_V>();
+    Cast<DstType, float, false>(
+        dst, weightTmpBuffer.template ReinterpretCast<float>(),
+        RoundMode::CAST_RINT, MASK_PLACEHOLDER, REPEAT_PLACE_HOLDER,
+        f322f16unaryParam);
+    PipeBarrier<PIPE_V>();
+    SetMaskNorm();
+    ResetMask();
+}
+
+template <typename DstType, typename ScaleType>
+__aicore__ inline void AntiQuant2(const LocalTensor<int4b_t> &src,
                                   const LocalTensor<DstType> &dst,
                                   const LocalTensor<ScaleType> &scale,
                                   const LocalTensor<uint8_t> &sharedTmpBuffer,
@@ -254,7 +336,7 @@ __aicore__ inline void AntiQuant2(const LocalTensor<SrcType> &src,
     UnaryRepeatParams f322f16unaryParams;
     f322f16unaryParams.dstRepStride = ONE_REPEAT_BLOCKS / 2;
     preCastScale<ScaleType, float>(scale, scaleBuffer);
-    preCastFP4Weight<SrcType, half>(src, weightBuffer,
+    preCastFP4Weight<int4b_t, half>(src, weightBuffer,
                                     dst.template ReinterpretCast<int16_t>());
     preCastHalfWeight(dst.template ReinterpretCast<half>(), weightBuffer,
                       f162f32unaryParams, tensorSize);
@@ -268,6 +350,21 @@ __aicore__ inline void AntiQuant2(const LocalTensor<SrcType> &src,
                                     weightBuffer[weightOffset * sizeof(float)],
                                     f322f16unaryParams, binaryParams,
                                     tensorSize);
+}
+
+template <typename DstType, typename ScaleType>
+__aicore__ inline void
+AntiQuant2(const LocalTensor<int8_t> &src, const LocalTensor<DstType> &dst,
+           const ScaleType scale, const LocalTensor<uint8_t> &sharedTmpBuffer,
+           const AntiQuantShapeInfo &shapeInfo = {}) {
+
+    const int32_t tensorSize = src.GetSize();
+    preCastFP8Weight<int8_t>(src, sharedTmpBuffer,
+                             dst.template ReinterpretCast<int16_t>(),
+                             tensorSize);
+    antiquantProcess<float, bfloat16_t>(dst, scale,
+                                        sharedTmpBuffer[ONE_REPEAT_BYTES],
+                                        sharedTmpBuffer, tensorSize);
 }
 } // namespace GROUPED_MATMUL
 #endif

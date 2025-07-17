@@ -6,15 +6,18 @@
 // #include "aclnn_grouped_matmul_v4.h"
 #include "aclnn_grouped_matmul_antiquant.h"
 #include "aclnnop/aclnn_copy.h"
+#include <ATen/Tensor.h>
 #include <torch/extension.h>
 #include <torch/torch.h>
 #include <torch_npu/csrc/core/npu/NPUStream.h>
 
 namespace grouped_gemm {
+enum class GroupedGemmType { FP4 = 0, FP8 };
 void GroupedMatmul(at::Tensor x, at::Tensor weight,
                    at::Tensor antiquantScaleOptional,
                    at::Tensor antiquantOffsetOptional,
-                   at::Tensor groupListOptional, at::Tensor output
+                   at::Tensor groupListOptional, GroupedGemmType type,
+                   at::Tensor output
                    // int64_t splitItem,
                    // int64_t groupType,
                    // int64_t groupListType

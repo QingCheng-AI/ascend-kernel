@@ -299,6 +299,7 @@ class GMMAntiquantCompute : public GMMCompute<mmType, sync> {
     using CT = typename mmType::CT::T;
     using BiasT = typename mmType::BiasT::T;
     using WT = DTYPE_WEIGHT;
+    using ScaleType = DTYPE_ANTIQUANT_SCALE;
     constexpr static bool transposeX = mmType::AT::isTrans;
     constexpr static bool transposeW = mmType::BT::isTrans;
     constexpr static bool antiquantPerformanceFlag = antiquantPerformance;
@@ -347,10 +348,10 @@ class GMMAntiquantCompute : public GMMCompute<mmType, sync> {
     GlobalTensor<int8_t> weightAntiQuantGm;
     GM_ADDR antiScaleTensorPtr;
     GM_ADDR antiOffsetTensorPtr;
-    LocalTensor<BT> scaleInUb;
-    LocalTensor<BT> offsetInUb;
-    GlobalTensor<AT> antiScaleGM;
-    GlobalTensor<AT> antiOffsetGM;
+    LocalTensor<ScaleType> scaleInUb;
+    LocalTensor<ScaleType> offsetInUb;
+    GlobalTensor<ScaleType> antiScaleGM;
+    GlobalTensor<ScaleType> antiOffsetGM;
     // define the que
     TQue<QuePosition::VECIN, 1> vecInQueue;
     TQue<QuePosition::VECOUT, 1> vecOutQueue;
@@ -380,12 +381,22 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::Init(
     isPerGroup = perGroupSize > 0;
     this->weightGm.SetGlobalBuffer((__gm__ BT *)workspace);
     // uint32_t maxUbBaseN = BEST_UB_BASEN;
-    uint32_t maxUbBaseN = 256;
+    uint32_t maxUbBaseN;
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        maxUbBaseN = 256;
+    } else {
+        maxUbBaseN = 128;
+    }
     if constexpr (transposeW) {
         maxUbBaseN = this->ubBaseN;
     }
-    this->pipe->InitBuffer(scaleInQueue, 2, maxUbBaseN * sizeof(BT) * 4);
-    this->pipe->InitBuffer(offsetInQueue, 2, maxUbBaseN * sizeof(BT));
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        this->pipe->InitBuffer(scaleInQueue, 2,
+                               maxUbBaseN * sizeof(ScaleType) * 4);
+    } else {
+        this->pipe->InitBuffer(scaleInQueue, 2, 32);
+    }
+    this->pipe->InitBuffer(offsetInQueue, 2, maxUbBaseN * sizeof(ScaleType));
     this->pipe->InitBuffer(vecInQueue, 2,
                            this->ubCalSize * GetTypeBits<WT>() / INT8_BITS);
     this->pipe->InitBuffer(vecOutQueue, 2,
@@ -452,8 +463,13 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::MMSync() {
         this->mm.WaitIterateAll();
         this->mmWaitStatus = false;
     }
-    if constexpr (antiquantPerformance) {
-        SyncAll<true>();
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        if constexpr (antiquantPerformance) {
+            SyncAll<true>();
+        }
+    } else {
+        AscendC::CrossCoreSetFlag<0x1, PIPE_MTE3>(0x8);
+        AscendC::CrossCoreWaitFlag(0x8);
     }
 }
 
@@ -464,17 +480,28 @@ __aicore__ inline void GMMAntiquantCompute<mmType, sync, antiquantPerformance>::
         weightAntiQuantGm.SetGlobalBuffer(
             GetTensorAddr<int8_t>(groupIdx, this->weightTensorPtr));
         antiScaleGM.SetGlobalBuffer(
-            GetTensorAddr<AT>(groupIdx, antiScaleTensorPtr));
+            GetTensorAddr<ScaleType>(groupIdx, antiScaleTensorPtr));
     } else {
         weightAntiQuantGm.SetGlobalBuffer(
             GetTensorAddr<int8_t>(0, this->weightTensorPtr) +
             mnConfig.wBaseOffset * GetTypeBits<WT>() / INT8_BITS);
         uint64_t antiquantParamsOffset = mnConfig.nAxisBaseOffset;
         if (isPerGroup) {
-            antiquantParamsOffset *= (mnConfig.k / perGroupSize);
+            if constexpr (IsSameType<WT, int4b_t>::value) {
+                // fp4的处理逻辑是，每次计算完一个group，就需要偏移一个矩阵，但因为只有k方向有倍数差（16），因此只需要除以perGroupSize
+                antiquantParamsOffset *= (mnConfig.k / perGroupSize);
+            } else {
+                // assert(perGroupSize == 128 && "must check if scale is 128 *
+                // 128 -> 1");
+                antiquantParamsOffset =
+                    (mnConfig.nAxisBaseOffset / perGroupSize);
+                antiquantParamsOffset *= (mnConfig.k / perGroupSize);
+            }
         }
-        antiScaleGM.SetGlobalBuffer(GetTensorAddr<AT>(0, antiScaleTensorPtr) +
-                                    antiquantParamsOffset);
+
+        antiScaleGM.SetGlobalBuffer(
+            GetTensorAddr<ScaleType>(0, antiScaleTensorPtr) +
+            antiquantParamsOffset);
     }
 }
 
@@ -551,10 +578,18 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::CastWeightProcess(
                 if (firstKLoop ||
                     curPergroupIdx > prePergroupIdx) { // load new group
                     FreeScaleAndOffset(firstKLoop);
-                    DataCopyScaleAndOffset(curBaseN, alignBaseN,
-                                           scaleOffset + offsetN +
-                                               curPergroupIdx * mnConfig.n,
-                                           mnConfig);
+                    if constexpr (IsSameType<WT, int4b_t>::value) {
+                        DataCopyScaleAndOffset(curBaseN, alignBaseN,
+                                               scaleOffset + offsetN +
+                                                   curPergroupIdx * mnConfig.n,
+                                               mnConfig);
+                    } else {
+                        DataCopyScaleAndOffset(curBaseN, alignBaseN,
+                                               ((scaleOffset + offsetN +
+                                                 curPergroupIdx * mnConfig.n) /
+                                                128),
+                                               mnConfig);
+                    }
                     prePergroupIdx = curPergroupIdx;
                 }
             }
@@ -566,10 +601,17 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::CastWeightProcess(
                 transposeW
                     ? offsetK + static_cast<uint64_t>(offsetN) * mnConfig.k
                     : static_cast<uint64_t>(offsetK) * mnConfig.n + offsetN;
-            DataCopyPad(inLocal,
-                        weightAntiQuantGm[(weightInOffset + wInOffset) *
-                                          GetTypeBits<WT>() / INT8_BITS],
-                        gmToUbIntriParams, padParams);
+            if constexpr (IsSameType<WT, int4b_t>::value) {
+                DataCopyPad(inLocal,
+                            weightAntiQuantGm[(weightInOffset + wInOffset) *
+                                              GetTypeBits<WT>() / INT8_BITS],
+                            gmToUbIntriParams, padParams);
+            } else {
+                DataCopyPad(inLocal,
+                            weightAntiQuantGm[(weightInOffset + wInOffset) *
+                                              GetTypeBits<WT>() / INT8_BITS],
+                            gmToUbIntriParams, padParams);
+            }
             vecInQueue.EnQue(inLocal);
 
             DataCopyExtParams ubToGmIntriParams;
@@ -592,15 +634,23 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::CastWeightProcess(
                 transposeW
                     ? mnConfig.wOutOffset + offsetK + offsetN * mnConfig.k
                     : mnConfig.wOutOffset + offsetK * mnConfig.n + offsetN;
-            for (int i = 0; i < 4; i++) {
-                DataCopyPad(
-                    this->weightGm[weightOutOffset + mnConfig.n * 16 * i],
-                    wResUb[256 * i], ubToGmIntriParams);
-            }
-            for (int i = 0; i < 4; i++) {
-                DataCopyPad(
-                    this->weightGm[weightOutOffset + mnConfig.n * (16 * i + 8)],
-                    wResUb[8320 + 256 * i], ubToGmIntriParams);
+            if constexpr (IsSameType<WT, int4b_t>::value) {
+                for (int i = 0; i < 4; i++) {
+                    DataCopyPad(
+                        this->weightGm[weightOutOffset + mnConfig.n * 16 * i],
+                        wResUb[256 * i], ubToGmIntriParams);
+                }
+                for (int i = 0; i < 4; i++) {
+                    DataCopyPad(this->weightGm[weightOutOffset +
+                                               mnConfig.n * (16 * i + 8)],
+                                wResUb[8320 + 256 * i],
+                                ubToGmIntriParams); // 8320 = 520 * 16, 520 =
+                                                    // 512 + 8 (padding)
+                }
+            } else {
+
+                DataCopyPad(this->weightGm[weightOutOffset], wResUb,
+                            ubToGmIntriParams);
             }
             vecOutQueue.FreeTensor(wResUb);
         }
@@ -620,12 +670,22 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::CastWeightCompute(
     LocalTensor<BT> wResUb = vecOutQueue.AllocTensor<BT>();
     LocalTensor<uint8_t> tmpLocal = tmpUb.template ReinterpretCast<uint8_t>();
     AntiQuantShapeInfo shapeInfo;
-    shapeInfo.perGroupSize = 16;
-    shapeInfo.baseN = 256;
-    shapeInfo.baseK = 64;
-    AntiQuant2<int4b_t, bfloat16_t, bfloat16_t>(
-        wInUb, wResUb.template ReinterpretCast<bfloat16_t>(),
-        scaleInUb.template ReinterpretCast<bfloat16_t>(), tmpLocal, shapeInfo);
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        shapeInfo.perGroupSize = 16;
+        shapeInfo.baseN = 256;
+        shapeInfo.baseK = 64;
+        AntiQuant2<bfloat16_t, bfloat16_t>(
+            wInUb, wResUb.template ReinterpretCast<bfloat16_t>(),
+            scaleInUb.template ReinterpretCast<bfloat16_t>(), tmpLocal,
+            shapeInfo);
+    } else {
+        shapeInfo.perGroupSize = 128;
+        shapeInfo.baseN = 128;
+        shapeInfo.baseK = 128;
+        AntiQuant2<bfloat16_t, float>(
+            wInUb, wResUb.template ReinterpretCast<bfloat16_t>(), scaleInUb(0),
+            tmpLocal, shapeInfo);
+    }
 
     vecInQueue.FreeTensor(wInUb);
     vecOutQueue.EnQue<BT>(wResUb);
@@ -636,18 +696,37 @@ __aicore__ inline void GMMAntiquantCompute<mmType, sync, antiquantPerformance>::
     SetGmToUbDataCopyParams(const uint32_t curBaseN, const uint32_t curBaseK,
                             const MNConfig &mnConfig,
                             DataCopyExtParams &intriParams) {
-    if constexpr (transposeW) {
-        intriParams.blockLen = Ceil(curBaseK * GetTypeBits<WT>(), INT8_BITS);
-        intriParams.blockCount = curBaseN;
-        intriParams.srcStride =
-            Ceil((mnConfig.k - curBaseK) * GetTypeBits<WT>(), INT8_BITS);
-        intriParams.dstStride = 0;
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        if constexpr (transposeW) {
+            intriParams.blockLen =
+                Ceil(curBaseK * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.blockCount = curBaseN;
+            intriParams.srcStride =
+                Ceil((mnConfig.k - curBaseK) * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.dstStride = 0;
+        } else {
+            intriParams.blockLen =
+                Ceil(curBaseN / 2, 1); // 此处除以2因为用int8_t表示int4b_t
+            intriParams.blockCount = curBaseK;
+            intriParams.srcStride =
+                Ceil((mnConfig.n - curBaseN) * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.dstStride = 0;
+        }
     } else {
-        intriParams.blockLen = Ceil(curBaseN / 2, 1);
-        intriParams.blockCount = curBaseK;
-        intriParams.srcStride =
-            Ceil((mnConfig.n - curBaseN) * GetTypeBits<WT>(), INT8_BITS);
-        intriParams.dstStride = 0;
+        if constexpr (transposeW) {
+            intriParams.blockLen =
+                Ceil(curBaseK * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.blockCount = curBaseN;
+            intriParams.srcStride =
+                Ceil((mnConfig.k - curBaseK) * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.dstStride = 0;
+        } else {
+            intriParams.blockLen = curBaseN;
+            intriParams.blockCount = curBaseK;
+            intriParams.srcStride =
+                Ceil((mnConfig.n - curBaseN) * GetTypeBits<WT>(), INT8_BITS);
+            intriParams.dstStride = 0;
+        }
     }
 }
 
@@ -656,18 +735,34 @@ __aicore__ inline void GMMAntiquantCompute<mmType, sync, antiquantPerformance>::
     SetUbToGmDataCopyParams(const uint32_t curBaseN, const uint32_t alignRowLen,
                             const uint32_t curBaseK, const MNConfig &mnConfig,
                             DataCopyExtParams &intriParams) {
-    if constexpr (transposeW) {
-        uint32_t alignBaseK = AlignUp(curBaseK, UB_BLOCK_UNIT_SIZE);
-        intriParams.blockLen = curBaseK * sizeof(BT);
-        intriParams.blockCount = curBaseN;
-        intriParams.srcStride =
-            (alignRowLen - curBaseK) / (UB_BLOCK_UNIT_SIZE / sizeof(BT));
-        intriParams.dstStride = (mnConfig.k - curBaseK) * sizeof(BT);
+    if (IsSameType<WT, int4b_t>::value) {
+        if constexpr (transposeW) {
+            uint32_t alignBaseK = AlignUp(curBaseK, UB_BLOCK_UNIT_SIZE);
+            intriParams.blockLen = curBaseK * sizeof(BT);
+            intriParams.blockCount = curBaseN;
+            intriParams.srcStride =
+                (alignRowLen - curBaseK) / (UB_BLOCK_UNIT_SIZE / sizeof(BT));
+            intriParams.dstStride = (mnConfig.k - curBaseK) * sizeof(BT);
+        } else {
+            intriParams.blockLen = curBaseN * sizeof(BT);
+            intriParams.blockCount = 8;
+            intriParams.srcStride = 49;
+            intriParams.dstStride = (mnConfig.n - curBaseN) * sizeof(BT);
+        }
     } else {
-        intriParams.blockLen = curBaseN * sizeof(BT);
-        intriParams.blockCount = 8;
-        intriParams.srcStride = 49;
-        intriParams.dstStride = (mnConfig.n - curBaseN) * sizeof(BT);
+        if constexpr (transposeW) {
+            uint32_t alignBaseK = AlignUp(curBaseK, UB_BLOCK_UNIT_SIZE);
+            intriParams.blockLen = curBaseK * sizeof(BT);
+            intriParams.blockCount = curBaseN;
+            intriParams.srcStride =
+                (alignRowLen - curBaseK) / (UB_BLOCK_UNIT_SIZE / sizeof(BT));
+            intriParams.dstStride = (mnConfig.k - curBaseK) * sizeof(BT);
+        } else {
+            intriParams.blockLen = curBaseN * sizeof(BT);
+            intriParams.blockCount = curBaseK;
+            intriParams.srcStride = 0;
+            intriParams.dstStride = (mnConfig.n - curBaseN) * sizeof(BT);
+        }
     }
 }
 
@@ -678,18 +773,29 @@ GMMAntiquantCompute<mmType, sync, antiquantPerformance>::DataCopyScaleAndOffset(
     const MNConfig &mnConfig) {
     DataCopyPadParams padParams;
     DataCopyParams scaleParams;
-    scaleParams.blockLen = curBaseN * sizeof(BT);
-    scaleParams.blockCount = 4;
-    scaleParams.srcStride = (mnConfig.n - curBaseN) * sizeof(BT);
-    scaleParams.dstStride = 0;
-    // printf(" offset %ld ", realScaleOffset);
-    LocalTensor<BT> scaleLocal = scaleInQueue.AllocTensor<BT>();
-    DataCopyPad(scaleLocal, antiScaleGM[realScaleOffset], scaleParams,
-                padParams);
+    LocalTensor<ScaleType> scaleLocal = scaleInQueue.AllocTensor<ScaleType>();
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        scaleParams.blockLen =
+            curBaseN * sizeof(ScaleType); // 每行scale对应256个数
+        scaleParams.blockCount =
+            4; // 64行weight对应1行scale，每次处理256行，也即4个block
+        scaleParams.srcStride =
+            (mnConfig.n - curBaseN) * sizeof(ScaleType); // 调整读取的区间
+        scaleParams.dstStride = 0;
+        DataCopyPad(scaleLocal, antiScaleGM[realScaleOffset], scaleParams,
+                    padParams);
+    } else {
+        scaleParams.blockLen = sizeof(ScaleType); // 每128 * 128对应一个scale
+        scaleParams.blockCount = 1;               // 每次处理128 * 128
+        DataCopyPad(scaleLocal, antiScaleGM[realScaleOffset], scaleParams,
+                    padParams);
+    }
     scaleInQueue.EnQue(scaleLocal);
 
-    scaleInUb = scaleInQueue.DeQue<BT>();
-    scaleInUb.SetSize(alignBaseN * 4);
+    scaleInUb = scaleInQueue.DeQue<ScaleType>();
+    if constexpr (IsSameType<WT, int4b_t>::value) {
+        scaleInUb.SetSize(alignBaseN * 4);
+    }
 }
 
 template <class mmType, bool sync = false>

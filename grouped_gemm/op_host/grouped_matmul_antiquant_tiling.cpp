@@ -119,10 +119,10 @@ constexpr uint32_t Y_INDEX = 0;
 constexpr int64_t BEST_L1_PARTA = 256 * 1024;
 constexpr int64_t BEST_L1_PARTB = 128 * 1024;
 constexpr uint32_t L1_PARTA_SIZE = 256 * 1024;
-constexpr int32_t BEST_BASEN = 256;
-constexpr int32_t BEST_UB_BASEK = 256;
-constexpr int32_t BEST_UB_BASEN = 256;
-constexpr int32_t MAX_BASEM = 256;
+int32_t BEST_BASEN = 256;
+int32_t BEST_UB_BASEK = 256;
+int32_t BEST_UB_BASEN = 256;
+int32_t MAX_BASEM = 256;
 constexpr uint32_t UB_BLOCK_UNIT_SIZE = 32; // 32: a block has 32 bytes data
 constexpr uint32_t UB_ANTIQUANT_PER_BLOCK_ALIGN = 4 * 1024;
 constexpr uint32_t UB_A16W8_BLOCK_NUM_FP16 =
@@ -586,6 +586,8 @@ void GMMTiling::GMMSetTilingKey(gert::TilingContext *context) const {
             1); // set as batchmod for template using SyncAll
     } else {
         context->SetTilingKey(TILING_KEY);
+        context->SetScheduleMode(
+            1); // 打开适用于核间同步的调度模式
     }
 }
 
@@ -611,6 +613,13 @@ ge::graphStatus GMMTiling::GMMGetAttrs(const gert::TilingContext *context) {
     wFormat_ = wFormat0 == ge::FORMAT_FRACTAL_NZ
                    ? matmul_tiling::CubeFormat::NZ
                    : matmul_tiling::CubeFormat::ND;
+    // set const values
+    if (weightDtype_ == ge::DT_UINT8) {
+        BEST_BASEN = 128;
+        BEST_UB_BASEK = 128;
+        BEST_UB_BASEN = 128;
+        MAX_BASEM = 128;
+    }
     return ge::GRAPH_SUCCESS;
 }
 
@@ -636,6 +645,11 @@ ge::graphStatus GMMTiling::GMMSetUbDivideBlkAntiquant() {
             ubDivideBlkNum_ = UB_A16W4_BLOCK_NUM_BF16;
             ubIoBlkNum_ = UB_A16W4_IO_USED_BLOCK_BF16;
         }
+        ubBlockAlign_ = UB_ANTIQUANT_PER_BLOCK_ALIGN;
+        return ge::GRAPH_SUCCESS;
+    } else if (xDType_ == ge::DT_BF16 && weightDtype_ == ge::DT_UINT8) {
+        ubDivideBlkNum_ = UB_A16W4_BLOCK_NUM_BF16;
+        ubIoBlkNum_ = UB_A16W8_IO_USED_BLOCK_BF16;
         ubBlockAlign_ = UB_ANTIQUANT_PER_BLOCK_ALIGN;
         return ge::GRAPH_SUCCESS;
     }

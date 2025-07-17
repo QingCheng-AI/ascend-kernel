@@ -109,11 +109,18 @@
 
 // #define GMM_ANTI_QUANT
 #define DTYPE_X bfloat16_t
-#define DTYPE_WEIGHT int4b_t
 #define DTYPE_BIAS float
 #define DTYPE_Y bfloat16_t
 #define ORIG_DTYPE_X DT_BF16
+
+#if ORIG_DTYPE_WEIGHT == DT_UINT8
+#define DTYPE_WEIGHT int8_t
+#else
+#define DTYPE_WEIGHT int4b_t
 #define ORIG_DTYPE_WEIGHT DT_INT4
+#define DTYPE_ANTIQUANT_SCALE bfloat16_t
+#endif
+
 #define ORIG_DTYPE_Y DT_BF16
 #if defined(ORIG_DTYPE_X) && defined(ORIG_DTYPE_WEIGHT) &&                     \
     defined(ORIG_DTYPE_Y) && defined(DT_INT8) && defined(DT_BF16) &&           \

@@ -40,12 +40,45 @@ void get_size(at::Tensor t, int64_t *sizes) {
     }
 }
 
+// 用于Aten和Acl的类型转换
+#define AT_ALL_SCALAR_TYPE_AND_ACL_DATATYPE_PAIR(_)                            \
+    _(at::ScalarType::Byte, ACL_UINT8)                                         \
+    _(at::ScalarType::Char, ACL_INT8)                                          \
+    _(at::ScalarType::Short, ACL_INT16)                                        \
+    _(at::ScalarType::Int, ACL_INT32)                                          \
+    _(at::ScalarType::Long, ACL_INT64)                                         \
+    _(at::ScalarType::Half, ACL_FLOAT16)                                       \
+    _(at::ScalarType::Float, ACL_FLOAT)                                        \
+    _(at::ScalarType::Double, ACL_DOUBLE)                                      \
+    _(at::ScalarType::ComplexHalf, ACL_DT_UNDEFINED)                           \
+    _(at::ScalarType::ComplexFloat, ACL_COMPLEX64)                             \
+    _(at::ScalarType::ComplexDouble, ACL_COMPLEX128)                           \
+    _(at::ScalarType::Bool, ACL_BOOL)                                          \
+    _(at::ScalarType::QInt8, ACL_DT_UNDEFINED)                                 \
+    _(at::ScalarType::QUInt8, ACL_DT_UNDEFINED)                                \
+    _(at::ScalarType::QInt32, ACL_DT_UNDEFINED)                                \
+    _(at::ScalarType::BFloat16, ACL_BF16)                                      \
+    _(at::ScalarType::QUInt4x2, ACL_DT_UNDEFINED)                              \
+    _(at::ScalarType::QUInt2x4, ACL_DT_UNDEFINED)                              \
+    _(at::ScalarType::Undefined, ACL_DT_UNDEFINED)                             \
+    _(at::ScalarType::NumOptions, ACL_DT_UNDEFINED)
+
+constexpr aclDataType kATenScalarTypeToAclDataTypeTable
+    [static_cast<int64_t>(at::ScalarType::NumOptions) + 1] = {
+#define DEFINE_ENUM(_1, n) n,
+        AT_ALL_SCALAR_TYPE_AND_ACL_DATATYPE_PAIR(DEFINE_ENUM)
+#undef DEFINE_ENUM
+};
+
 aclTensor *createTensor(at::Tensor t, const int dtype) {
     int64_t stride[t.dim()], sizes[t.dim()];
     get_stride(t, stride);
     get_size(t, sizes);
+    aclDataType acl_data_type =
+        kATenScalarTypeToAclDataTypeTable[static_cast<int64_t>(
+            t.scalar_type())];
     if (dtype == 0)
-        return aclCreateTensor(sizes, t.dim(), ACL_BF16, stride, 0,
+        return aclCreateTensor(sizes, t.dim(), acl_data_type, stride, 0,
                                ACL_FORMAT_ND, sizes, t.dim(), t.data_ptr());
     if (dtype == 1) {
         sizes[2] *= 2;
@@ -55,9 +88,6 @@ aclTensor *createTensor(at::Tensor t, const int dtype) {
         return aclCreateTensor(sizes, t.dim(), ACL_INT4, stride, 0,
                                ACL_FORMAT_ND, sizes, t.dim(), t.data_ptr());
     }
-    if (dtype == 2)
-        return aclCreateTensor(sizes, t.dim(), ACL_INT64, stride, 0,
-                               ACL_FORMAT_ND, sizes, t.dim(), t.data_ptr());
 }
 
 std::basic_string<char> get_id(at::Tensor input_1, at::Tensor input_2) {
@@ -122,7 +152,8 @@ std::map<std::basic_string<char>, void *> WorkspaceManager::workspaceManager;
 void GroupedMatmul(at::Tensor x, at::Tensor weight,
                    at::Tensor antiquantScaleOptional,
                    at::Tensor antiquantOffsetOptional,
-                   at::Tensor groupListOptional, at::Tensor output
+                   at::Tensor groupListOptional, GroupedGemmType type,
+                   at::Tensor output
                    // int64_t splitItem,
                    // int64_t groupType,
                    // int64_t groupListType
@@ -133,18 +164,14 @@ void GroupedMatmul(at::Tensor x, at::Tensor weight,
     // aclrtStream acl_stream;
     // aclrtCreateStream(&acl_stream);
     aclTensor *x_ = createTensor(x, 0);
-    // aclTensorList *x_ = createTensor(&tmp, 1);
-    aclTensor *weight_ = createTensor(weight, 1);
-    // aclTensorList *weight_ = createTensor(&tmp, 1);
+    aclTensor *weight_ = type == GroupedGemmType::FP4 ? createTensor(weight, 1)
+                                                      : createTensor(weight, 0);
     aclTensor *antiquantScaleOptional_ =
         createTensor(antiquantScaleOptional, 0);
-    // aclTensorList *antiquantScaleOptional_ = createTensor(&tmp, 1);
     aclTensor *antiquantOffsetOptional_ =
         createTensor(antiquantOffsetOptional, 0);
-    // aclTensorList *antiquantOffsetOptional_ = createTensor(&tmp, 1);
-    aclTensor *groupListOptional_ = createTensor(groupListOptional, 2);
+    aclTensor *groupListOptional_ = createTensor(groupListOptional, 0);
     aclTensor *output_ = createTensor(output, 0);
-    // aclTensorList *output_ = createTensor(&tmp, 1);
     uint64_t workspaceSize = 0;
     void *workspaceAddr = nullptr;
     aclOpExecutor *executor;
@@ -164,7 +191,7 @@ void GroupedMatmul(at::Tensor x, at::Tensor weight,
     // start = std::chrono::system_clock::now();
     ret = aclnnGroupedMatmulAntiquant(workspaceAddr, workspaceSize, executor,
                                       acl_stream);
-    ret = aclrtSynchronizeStream(acl_stream);
+    // ret = aclrtSynchronizeStream(acl_stream);
     CHECK_RET(ret == ACL_SUCCESS,
               LOG_PRINT("aclrtSynchronizeStream failed. ERROR: %d\n", ret));
     //   CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclnnGroupedMatmul failed.

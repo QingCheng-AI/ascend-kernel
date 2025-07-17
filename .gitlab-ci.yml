@@ -28,7 +28,7 @@ format_check:
 
 ############################################################################################################
 # Build
-env_build_ascend:
+env_build_ascend_fp4:
   stage: env
   only:
     - merge_requests
@@ -59,5 +59,38 @@ env_build_ascend:
       -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
       -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
       -v /etc/ascend_install.info:/etc/ascend_install.info \
-      quay.io/ascend/vllm-ascend:v0.8.5rc1 bash -c "cd /workspace/grouped_gemm && pip install . && cd test && bash run_test.sh"
+      quay.io/ascend/vllm-ascend:v0.8.5rc1 bash -c "cp -r /workspace/grouped_gemm /tmp && cd /tmp/grouped_gemm && pip install . && cd test/ci-test && python test_group_gemm_fp4.py && bash clean.sh"
+
+env_build_ascend_fp8:
+  stage: env
+  only:
+    - merge_requests
+  tags:
+    - huawei-4-910B
+  needs:
+    - format_check
+  script:
+    - CI_WORKSPACE=$(pwd)
+    - |
+      grun 8 docker run --rm \
+      --name ${CUR_COMMIT_ID} \
+      --device /dev/davinci0 \
+      --device /dev/davinci1 \
+      --device /dev/davinci2 \
+      --device /dev/davinci3 \
+      --device /dev/davinci4 \
+      --device /dev/davinci5 \
+      --device /dev/davinci6 \
+      --device /dev/davinci7 \
+      --device /dev/davinci_manager \
+      --device /dev/devmm_svm \
+      --device /dev/hisi_hdc \
+      -v "${CI_WORKSPACE}:/workspace" \
+      -w /workspace \
+      -v /usr/local/dcmi:/usr/local/dcmi \
+      -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+      -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
+      -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
+      -v /etc/ascend_install.info:/etc/ascend_install.info \
+      quay.io/ascend/vllm-ascend:v0.8.5rc1 bash -c "cp -r /workspace/grouped_gemm /tmp && cd /tmp/grouped_gemm && pip install . && cd test/ci-test && python test_group_gemm_fp8.py && bash clean.sh"
 
