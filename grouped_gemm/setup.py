@@ -12,6 +12,9 @@ import tempfile
 # 获取 pybind11 的头文件路径
 pybind11_include = pybind11.get_include()
 
+# 算子包所含算子列表
+op_list = ["grouped_matmul_antiquant", "grouped_soft_gemv"]
+
 # 检查必要的环境变量
 if "BASE_LIBS_PATH" not in os.environ:
     if "ASCEND_HOME_PATH" not in os.environ:
@@ -34,24 +37,27 @@ class CustomBuildExtension(BuildExtension):
             try:
                 # 将ascend算子的相关代码和编译文件放在/tmp下
                 tmp_dir = tempfile.mkdtemp(prefix="grouped_gemm_", dir="/tmp")
-                subprocess.run(
-                    ["cp", "grouped_matmul_antiquant.json", tmp_dir], check=True
-                )
-                subprocess.run(
-                    [
-                        "msopgen",
-                        "gen",
-                        "-i",
-                        f"{tmp_dir}/grouped_matmul_antiquant.json",
-                        "-c",
-                        "ai_core-Ascend910B2",
-                        "-lan",
-                        "cpp",
-                        "-out",
-                        f"{tmp_dir}/grouped_gemm_autogen",
-                    ],
-                    check=True,
-                )
+                subprocess.run(["cp", "-r", "op_json", tmp_dir], check=True)
+                first_op = True
+                for op in op_list:
+                    subprocess.run(
+                        [
+                            "msopgen",
+                            "gen",
+                            "-i",
+                            f"{tmp_dir}/op_json/{op}.json",
+                            "-c",
+                            "ai_core-Ascend910B2",
+                            "-m",
+                            f"{0 if first_op else 1}",
+                            "-lan",
+                            "cpp",
+                            "-out",
+                            f"{tmp_dir}/grouped_gemm_autogen",
+                        ],
+                        check=True,
+                    )
+                    first_op = False
                 # os.chdir('grouped_gemm_autogen')
                 subprocess.run(
                     ["cp", "-r", "op_host", f"{tmp_dir}/grouped_gemm_autogen"],
@@ -125,7 +131,6 @@ grouped_gemm = CppExtension(
     ],
     libraries=[
         "cust_opapi",
-        # 'opapi',
         "torch_npu",
     ],
 )

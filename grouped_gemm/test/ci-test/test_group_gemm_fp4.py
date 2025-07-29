@@ -17,6 +17,7 @@ import os
 
 site_packages_path = get_ascend_custom_opp_path()
 os.environ["ASCEND_CUSTOM_OPP_PATH"] = site_packages_path
+os.environ["LD_LIBRARY_PATH"] += os.path.join(site_packages_path, "op_api", "lib")
 
 FP4_E2M1_LEVELS = torch.tensor(
     [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float32

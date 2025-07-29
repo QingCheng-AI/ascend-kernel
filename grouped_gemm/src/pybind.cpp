@@ -7,16 +7,11 @@ PYBIND11_MODULE(grouped_gemm, m) {
     py::enum_<GroupedGemmType>(m, "GroupedGemmType")
         .value("FP4", GroupedGemmType::FP4)
         .value("FP8", GroupedGemmType::FP8);
-    m.def("grouped_gemm", &GroupedMatmul, "x"_a, "weight"_a,
+    m.def("grouped_gemm", &GroupedGEMM, "x"_a, "weight"_a,
           "antiquantScaleOptional"_a, "antiquantOffsetOptional"_a,
-          "groupListOptional"_a, "type"_a, "output"_a,
-          //   "splitItem"_a,
-          //   "groupType"_a,
-          //   "groupListType"_a,
-          "GROUP MATMUL.");
-    // m.def("grouped_gemm", &GroupedMatmul,\
-        //       "GROUP MATMUL."
-    //     );
+          "groupListOptional"_a, "type"_a, "output"_a, "GROUP GEMM.");
+    m.def("grouped_gemv", &GroupedGEMV, "x"_a, "weight"_a, "scale"_a,
+          "groupList"_a, "type"_a, "output"_a, "GROUP GEMV.");
 }
 
 } // namespace grouped_gemm

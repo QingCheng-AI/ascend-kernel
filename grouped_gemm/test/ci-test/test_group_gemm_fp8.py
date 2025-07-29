@@ -17,6 +17,7 @@ import os
 
 site_packages_path = get_ascend_custom_opp_path()
 os.environ["ASCEND_CUSTOM_OPP_PATH"] = site_packages_path
+os.environ["LD_LIBRARY_PATH"] += os.path.join(site_packages_path, "op_api", "lib")
 
 
 def anti_quant_fp8(weight, scale):
@@ -67,8 +68,6 @@ def check_get_fusion_group_matmul_():
     exp_output = torch_npu.npu_grouped_matmul(
         [x],
         [new_w1_w3],
-        # antiquant_scale=[scale],
-        # antiquant_offset=[scale_off],
         group_list=expert_tokens,
         split_item=2,
         group_type=0,
@@ -83,9 +82,6 @@ def check_get_fusion_group_matmul_():
             antiquantScaleOptional=scale,
             groupListOptional=expert_tokens,
             type=GroupedGemmType.FP8,
-            # splitItem=3,
-            # groupType=0,
-            # groupListType=0
         )
     torch.npu.synchronize()
     if torch.allclose(output, exp_output[0], atol=0.02):
