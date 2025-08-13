@@ -7,10 +7,12 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
                     "float16",
+                    "bfloat16",
                     "bfloat16"
                 ]
             },
@@ -19,11 +21,13 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
                     "int8",
-                    "int8"
+                    "int8",
+                    "uint8"
                 ]
             },
             {
@@ -31,11 +35,13 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
                     "float16",
-                    "bfloat16"
+                    "bfloat16",
+                    "float"
                 ]
             },
             {
@@ -43,11 +49,13 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
                     "float16",
-                    "bfloat16"
+                    "bfloat16",
+                    "float"
                 ]
             },
             {
@@ -55,9 +63,11 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
+                    "int64",
                     "int64",
                     "int64"
                 ]
@@ -69,10 +79,12 @@
                 "param_type": "required",
                 "format": [
                     "ND",
+                    "ND",
                     "ND"
                 ],
                 "type": [
                     "float16",
+                    "bfloat16",
                     "bfloat16"
                 ]
             }

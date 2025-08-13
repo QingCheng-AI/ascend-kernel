@@ -1,23 +1,7 @@
 import torch
-import grouped_gemm
-from grouped_gemm import GroupedGemmType
+import cinfer_ascendc
 import torch_npu
 import sys
-
-
-def get_ascend_custom_opp_path():
-    import os
-    import site
-
-    site_packages_path = os.path.join(site.getsitepackages()[0], "vendors", "customize")
-    return site_packages_path
-
-
-import os
-
-site_packages_path = get_ascend_custom_opp_path()
-os.environ["ASCEND_CUSTOM_OPP_PATH"] = site_packages_path
-os.environ["LD_LIBRARY_PATH"] += os.path.join(site_packages_path, "op_api", "lib")
 
 FP4_E2M1_LEVELS = torch.tensor(
     [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float32
@@ -201,17 +185,14 @@ def test_fp4_quantization():
     scale = anti_quant_fp8_scale(b_s, b_s_2)
     new_scale = scale.transpose(-2, -1).contiguous()
     scale_off = torch.zeros_like(new_scale, dtype=scale.dtype, device=scale.device)
-    grouped_gemm.grouped_gemm(
+    cinfer_ascendc.grouped_gemm(
         x,
         w1w3,
         output=output,
         antiquantOffsetOptional=scale_off,
         antiquantScaleOptional=new_scale,
         groupListOptional=expert_tokens,
-        type=GroupedGemmType.FP4,
-        # splitItem=3,
-        # groupType=0,
-        # groupListType=0
+        computeType="fp4",
     )
     torch.npu.synchronize()
     # exp out

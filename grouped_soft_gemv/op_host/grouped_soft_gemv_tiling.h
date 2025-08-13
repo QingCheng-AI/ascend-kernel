@@ -1,5 +1,5 @@
-#include "inc/error/ops_error.h"
-#include "inc/log/ops_log.h"
+#include "inc/ops_error.h"
+#include "inc/ops_log.h"
 #include "register/op_impl_registry.h"
 #include "register/tilingdata_base.h"
 #include "tiling/tiling_api.h"

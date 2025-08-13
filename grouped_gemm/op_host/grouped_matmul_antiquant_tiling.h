@@ -103,14 +103,13 @@
 #ifndef AIR_CXX_RUNTIME_V2_OP_IMPL_GROUPED_MATMUL_ANTIQUANT_H
 #define AIR_CXX_RUNTIME_V2_OP_IMPL_GROUPED_MATMUL_ANTIQUANT_H
 
-#include "inc/error/ops_error.h"
-#include "inc/log/ops_log.h"
+#include "inc/ops_error.h"
+#include "inc/ops_log.h"
 #include "register/op_impl_registry.h"
 #include "register/tilingdata_base.h"
 #include "tiling/tiling_api.h"
 #include <climits>
 #include <graph/utils/type_utils.h>
-// #include "inc/tiling/tiling_base.h"
 #ifdef ASCENDC_OP_TEST
 #define ASCENDC_EXTERN_C extern "C"
 #else

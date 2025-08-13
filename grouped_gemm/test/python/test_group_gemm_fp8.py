@@ -1,23 +1,7 @@
 import torch
-import grouped_gemm
-from grouped_gemm import GroupedGemmType
+import cinfer_ascendc
 import torch_npu
 import sys
-
-
-def get_ascend_custom_opp_path():
-    import os
-    import site
-
-    site_packages_path = os.path.join(site.getsitepackages()[0], "vendors", "customize")
-    return site_packages_path
-
-
-import os
-
-site_packages_path = get_ascend_custom_opp_path()
-os.environ["ASCEND_CUSTOM_OPP_PATH"] = site_packages_path
-os.environ["LD_LIBRARY_PATH"] += os.path.join(site_packages_path, "op_api", "lib")
 
 
 def anti_quant_fp8(weight, scale):
@@ -74,14 +58,14 @@ def check_get_fusion_group_matmul_():
         group_list_type=0,
     )
     for i in range(1):
-        grouped_gemm.grouped_gemm(
+        cinfer_ascendc.grouped_gemm(
             x,
             w1w3,
             output=output,
             antiquantOffsetOptional=scale_off,
             antiquantScaleOptional=scale,
             groupListOptional=expert_tokens,
-            type=GroupedGemmType.FP8,
+            computeType="fp8",
         )
     torch.npu.synchronize()
     if torch.allclose(output, exp_output[0], atol=0.02):

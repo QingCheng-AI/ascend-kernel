@@ -1,0 +1,1 @@
+rm -rf bin build outputs kernel_meta fusion_result.json

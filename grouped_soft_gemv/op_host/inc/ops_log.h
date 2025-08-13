@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2024 Huawei Technologies Co., Ltd.
  * This file is a part of the CANN Open Software.
  * Licensed under CANN Open Software License Agreement Version 1.0 (the
  * "License"). Please refer to the License for details. You may not use this
@@ -97,66 +97,56 @@
  */
 
 /*!
- * \file grouped_matmul.cpp
+ * \file ops_log.h
  * \brief
  */
 
-#include "grouped_matmul_antiquant.h"
-#include "grouped_matmul.h"
-#include "grouped_matmul_utils.h"
-#include "kernel_operator.h"
+#pragma once
 
-using namespace AscendC;
-using namespace matmul;
-using namespace GROUPED_MATMUL;
+#include "dfx_base.h"
 
-constexpr CubeFormat wFormat = CubeFormat::ND;
-constexpr MatmulConfig matmulCFG = CFG_MDL;
+/* 基础日志 */
+#define OPS_LOG_D(OPS_DESC, ...) OPS_LOG_STUB_D(OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_I(OPS_DESC, ...) OPS_LOG_STUB_I(OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_W(OPS_DESC, ...) OPS_LOG_STUB_W(OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_E(OPS_DESC, ...)                                               \
+    OPS_INNER_ERR_STUB("EZ9999", OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_E_WITHOUT_REPORT(OPS_DESC, ...)                                \
+    OPS_LOG_STUB_E(OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_EVENT(OPS_DESC, ...) OPS_LOG_STUB_EVENT(OPS_DESC, __VA_ARGS__)
 
-template <bool trans = false>
-using xType =
-    MatmulType<AscendC::TPosition::GM, CubeFormat::ND, DTYPE_X, trans>;
+/* 全量日志
+ * 输出超长日志, 若日志超长, 则会被分为多行输出 */
+#define OPS_LOG_FULL(LEVEL, OPS_DESC, ...)                                     \
+    OPS_LOG_STUB_FULL(LEVEL, OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_D_FULL(OPS_DESC, ...)                                          \
+    OPS_LOG_STUB_FULL(DLOG_DEBUG, OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_I_FULL(OPS_DESC, ...)                                          \
+    OPS_LOG_STUB_FULL(DLOG_INFO, OPS_DESC, __VA_ARGS__)
+#define OPS_LOG_W_FULL(OPS_DESC, ...)                                          \
+    OPS_LOG_STUB_FULL(DLOG_WARN, OPS_DESC, __VA_ARGS__)
 
-template <bool trans = false>
-using weightType = MatmulType<AscendC::TPosition::GM, wFormat, DTYPE_X, trans>;
+/* 条件日志 */
+#define OPS_LOG_D_IF(COND, OP_DESC, EXPR, ...)                                 \
+    OPS_LOG_STUB_IF(COND, OPS_LOG_D(OP_DESC, __VA_ARGS__), EXPR)
+#define OPS_LOG_I_IF(COND, OP_DESC, EXPR, ...)                                 \
+    OPS_LOG_STUB_IF(COND, OPS_LOG_I(OP_DESC, __VA_ARGS__), EXPR)
+#define OPS_LOG_W_IF(COND, OP_DESC, EXPR, ...)                                 \
+    OPS_LOG_STUB_IF(COND, OPS_LOG_W(OP_DESC, __VA_ARGS__), EXPR)
+#define OPS_LOG_E_IF(COND, OP_DESC, EXPR, ...)                                 \
+    OPS_LOG_STUB_IF(COND, OPS_LOG_E(OP_DESC, __VA_ARGS__), EXPR)
+#define OPS_LOG_EVENT_IF(COND, OP_DESC, EXPR, ...)                             \
+    OPS_LOG_STUB_IF(COND, OPS_LOG_EVENT(OP_DESC, __VA_ARGS__), EXPR)
 
-using yType = MatmulType<AscendC::TPosition::GM, CubeFormat::ND, MM_DTYPE_Y>;
-
-using biasType = MatmulType<AscendC::TPosition::GM, CubeFormat::ND, DTYPE_BIAS>;
-
-#define GMM_IMP(computeClass, processClass, sync, cfg)                         \
-    do {                                                                       \
-        using matmulType =                                                     \
-            MMType<xType<false>, weightType<false>, yType, biasType, cfg>;     \
-        matmulType::MT mm;                                                     \
-        GET_TILING_DATA_MEMBER(GMMAntiquantTilingData, gmmBaseParams,          \
-                               gmmBaseParams_, tiling);                        \
-        GET_TILING_DATA_MEMBER(GMMAntiquantTilingData, mmTilingData,           \
-                               mmTilingData_, tiling);                         \
-        REGIST_MATMUL_OBJ(&tPipe, GetSysWorkSpacePtr(), mm, &mmTilingData_);   \
-        computeClass<matmulType, sync> computeOp(mm);                          \
-        computeOp.Init(x, weight, nullptr, nullptr, nullptr, antiquant_scale,  \
-                       antiquant_offset, group_list, nullptr, y, user1,        \
-                       &gmmBaseParams_, &mmTilingData_, &tPipe);               \
-        processClass<decltype(computeOp)> op(computeOp);                       \
-        op.Init(&gmmBaseParams_, &mmTilingData_, group_list, tiling);          \
-        op.Process();                                                          \
-    } while (0)
-
-extern "C" __global__ __aicore__ void
-grouped_matmul_antiquant(GM_ADDR x, GM_ADDR weight, GM_ADDR antiquant_scale,
-                         GM_ADDR antiquant_offset, GM_ADDR group_list,
-                         GM_ADDR y, GM_ADDR workspace, GM_ADDR tiling) {
-    TPipe tPipe;
-    AscendCUtils::SetOverflow(1);
-    KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIC_ONLY);
-    GM_ADDR user1 = GetUserWorkspace(workspace);
-    if (TILING_KEY_IS(0)) {
-        KERNEL_TASK_TYPE(0, KERNEL_TYPE_MIX_AIC_1_2);
-        GMM_IMP(GMMAntiquantComputeNorm, GMMAntiquantProcess, false, matmulCFG);
-    } else if (TILING_KEY_IS(3)) { // antiquant performence
-        KERNEL_TASK_TYPE(3, KERNEL_TYPE_MIX_AIC_1_2);
-        GMM_IMP(GMMAntiquantComputePerformance, GMMAntiquantProcess, false,
-                matmulCFG);
+#define OPS_LOG_E_IF_NULL(OPS_DESC, PTR, EXPR)                                 \
+    if (__builtin_expect((PTR) == nullptr, 0)) {                               \
+        OPS_LOG_STUB_E(OPS_DESC, "%s is nullptr!", #PTR);                      \
+        OPS_CALL_ERR_STUB("EZ9999", OPS_DESC, "%s is nullptr!", #PTR);         \
+        EXPR;                                                                  \
     }
-}
+
+#define OPS_CHECK(COND, LOG_FUNC, EXPR)                                        \
+    if (COND) {                                                                \
+        LOG_FUNC;                                                              \
+        EXPR;                                                                  \
+    }

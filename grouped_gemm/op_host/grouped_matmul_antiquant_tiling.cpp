@@ -586,8 +586,7 @@ void GMMTiling::GMMSetTilingKey(gert::TilingContext *context) const {
             1); // set as batchmod for template using SyncAll
     } else {
         context->SetTilingKey(TILING_KEY);
-        context->SetScheduleMode(
-            1); // 打开适用于核间同步的调度模式
+        context->SetScheduleMode(1); // 打开适用于核间同步的调度模式
     }
 }
 

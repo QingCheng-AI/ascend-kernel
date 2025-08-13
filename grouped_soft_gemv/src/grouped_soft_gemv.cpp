@@ -1,11 +1,12 @@
-#include "grouped_gemm.h"
+#include "grouped_soft_gemv.h"
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <map>
 #include <string>
 
-namespace grouped_gemm {
+namespace grouped_soft_gemv {
 
 #define CHECK_RET(cond, return_expr)                                           \
     do {                                                                       \
@@ -119,11 +120,9 @@ class WorkspaceManager {
 
 std::map<std::basic_string<char>, void *> WorkspaceManager::workspaceManager;
 
-void GroupedGemm(at::Tensor x, at::Tensor weight,
-                 at::Tensor antiquantScaleOptional,
-                 at::Tensor antiquantOffsetOptional,
-                 at::Tensor groupListOptional, char *computeType,
-                 at::Tensor output) {
+void GroupedSoftGemv(at::Tensor x, at::Tensor weight, at::Tensor scale,
+                     at::Tensor groupList, char *computeType,
+                     at::Tensor output) {
     auto acl_stream = c10_npu::getCurrentNPUStream().stream(true);
     aclTensor *x_ = createTensor(x, 0);
     CHECK_RET(
@@ -133,30 +132,25 @@ void GroupedGemm(at::Tensor x, at::Tensor weight,
             computeType));
     aclTensor *weight_ = !strcmp(computeType, "fp4") ? createTensor(weight, 1)
                                                      : createTensor(weight, 0);
-    aclTensor *antiquantScaleOptional_ =
-        createTensor(antiquantScaleOptional, 0);
-    aclTensor *antiquantOffsetOptional_ =
-        createTensor(antiquantOffsetOptional, 0);
-    aclTensor *groupListOptional_ = createTensor(groupListOptional, 0);
+    aclTensor *scale_ = createTensor(scale, 0);
+    aclTensor *groupList_ = createTensor(groupList, 0);
     aclTensor *output_ = createTensor(output, 0);
     uint64_t workspaceSize = 0;
     void *workspaceAddr = nullptr;
     aclOpExecutor *executor;
-    auto ret = aclnnGroupedMatmulAntiquantGetWorkspaceSize(
-        x_, weight_, antiquantScaleOptional_, antiquantOffsetOptional_,
-        groupListOptional_, output_, &workspaceSize, &executor);
+    auto ret = aclnnGroupedSoftGemvGetWorkspaceSize(
+        x_, weight_, scale_, groupList_, output_, &workspaceSize, &executor);
     CHECK_RET(
         ret == ACL_SUCCESS,
-        LOG_PRINT(
-            "aclnnGroupedMatmulAntiquantGetWorkspaceSize failed. ERROR: %d\n",
-            ret));
+        LOG_PRINT("aclnnGroupedSoftGemvGetWorkspaceSize failed. ERROR: %d\n",
+                  ret));
     // 根据第一段接口计算出的workspaceSize申请device内存并缓存
     workspaceAddr = WorkspaceManager().getFromMap(workspaceSize);
-
-    ret = aclnnGroupedMatmulAntiquant(workspaceAddr, workspaceSize, executor,
-                                      acl_stream);
+    ret = aclnnGroupedSoftGemv(workspaceAddr, workspaceSize, executor,
+                               acl_stream);
     CHECK_RET(ret == ACL_SUCCESS,
-              LOG_PRINT("aclrtSynchronizeStream failed. ERROR: %d\n", ret));
+              LOG_PRINT("aclnnGroupedSoftGemv failed. ERROR: %d\n", ret));
+
     return;
 }
-} // namespace grouped_gemm
+} // namespace grouped_soft_gemv

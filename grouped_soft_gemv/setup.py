@@ -12,7 +12,7 @@ import tempfile
 # 获取 pybind11 的头文件路径
 pybind11_include = pybind11.get_include()
 
-op_name = "grouped_gemm"
+op_name = "grouped_soft_gemv"
 
 # 检查必要的环境变量
 if "BASE_LIBS_PATH" not in os.environ:

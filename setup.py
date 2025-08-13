@@ -12,7 +12,10 @@ import tempfile
 # 获取 pybind11 的头文件路径
 pybind11_include = pybind11.get_include()
 
-op_name = "grouped_gemm"
+# 算子包所含算子列表
+op_list_opened = ["grouped_gemm", "grouped_soft_gemv"]
+closed_dir = "ascend-closed"
+op_list_closed = ["grouped_query_attention"]
 
 # 检查必要的环境变量
 if "BASE_LIBS_PATH" not in os.environ:
@@ -31,37 +34,78 @@ site_packages_path = site.getsitepackages()[0]
 # 创建自定义的 BuildExtension 类
 class CustomBuildExtension(BuildExtension):
     def build_extension(self, ext):
-        # 清理之前可能残留的setup安装文件
-        subprocess.run(["bash", "clean_build.sh"], check=True)
-        # 安装ascendc算子
+        # 在执行扩展构建之前，先执行 build.sh 和 .run 文件
         if ext.name == "cinfer_ascendc":
             try:
+                subprocess.run(["bash", "clean_build.sh"], check=True)
                 # 将ascend算子的相关代码和编译文件放在/tmp下
                 tmp_dir = tempfile.mkdtemp(prefix="cinfer_ascendc_", dir="/tmp")
-                subprocess.run(["cp", "-r", f"{op_name}.json", tmp_dir], check=True)
-                subprocess.run(
-                    [
-                        "msopgen",
-                        "gen",
-                        "-i",
-                        f"{tmp_dir}/{op_name}.json",
-                        "-c",
-                        "ai_core-Ascend910B2",
-                        "-lan",
-                        "cpp",
-                        "-out",
-                        f"{tmp_dir}/cinfer_ascendc_autogen",
-                    ],
-                    check=True,
-                )
-                subprocess.run(
-                    ["cp", "-r", "op_host", f"{tmp_dir}/cinfer_ascendc_autogen"],
-                    check=True,
-                )
-                subprocess.run(
-                    ["cp", "-r", "op_kernel", f"{tmp_dir}/cinfer_ascendc_autogen"],
-                    check=True,
-                )
+
+                first_op = True
+                for op in op_list_opened:
+                    subprocess.run(["cp", "-r", f"{op}/{op}.json", tmp_dir], check=True)
+                    subprocess.run(
+                        [
+                            "msopgen",
+                            "gen",
+                            "-i",
+                            f"{tmp_dir}/{op}.json",
+                            "-c",
+                            "ai_core-Ascend910B2",
+                            "-m",
+                            f"{0 if first_op else 1}",
+                            "-lan",
+                            "cpp",
+                            "-out",
+                            f"{tmp_dir}/cinfer_ascendc_autogen",
+                        ],
+                        check=True,
+                    )
+                    first_op = False
+                    subprocess.run(
+                        [
+                            "cp",
+                            "-r",
+                            f"{op}/op_host",
+                            f"{op}/op_kernel",
+                            f"{tmp_dir}/cinfer_ascendc_autogen",
+                        ],
+                        check=True,
+                    )
+                if os.path.exists(closed_dir) and os.listdir(closed_dir):
+                    for op in op_list_closed:
+                        subprocess.run(
+                            ["cp", "-r", f"{closed_dir}/{op}/{op}.json", tmp_dir],
+                            check=True,
+                        )
+                        subprocess.run(
+                            [
+                                "msopgen",
+                                "gen",
+                                "-i",
+                                f"{tmp_dir}/{op}.json",
+                                "-c",
+                                "ai_core-Ascend910B2",
+                                "-m",
+                                f"{0 if first_op else 1}",
+                                "-lan",
+                                "cpp",
+                                "-out",
+                                f"{tmp_dir}/cinfer_ascendc_autogen",
+                            ],
+                            check=True,
+                        )
+                        first_op = False
+                        subprocess.run(
+                            [
+                                "cp",
+                                "-r",
+                                f"{closed_dir}/{op}/op_host",
+                                f"{closed_dir}/{op}/op_kernel",
+                                f"{tmp_dir}/cinfer_ascendc_autogen",
+                            ],
+                            check=True,
+                        )
                 cur_dir = os.getcwd()
                 os.chdir(f"{tmp_dir}/cinfer_ascendc_autogen")
                 # 执行 build.sh
@@ -85,15 +129,22 @@ class CustomBuildExtension(BuildExtension):
         super().build_extension(ext)
 
 
+def get_source_files():
+    sources = ["pybind.cpp"]
+    for op in op_list_opened:
+        sources.append(f"{op}/src/{op}.cpp")
+    if os.path.exists(closed_dir) and os.listdir(closed_dir):
+        for op in op_list_closed:
+            sources.append(f"{closed_dir}/{op}/src/{op}.cpp")
+    return sources
+
+
 # 定义扩展模块
 os.environ["CXX"] = "/usr/bin/c++"
 torch_npu_path = os.path.dirname(torch_npu.__file__)
 cinfer_ascendc = CppExtension(
     "cinfer_ascendc",  # 模块名称（需与 PYBIND11_MODULE 中一致）
-    sources=[
-        "./src/pybind.cpp",
-        f"./src/{op_name}.cpp",
-    ],  # 包含绑定代码的 C++ 文件
+    sources=get_source_files(),  # 包含绑定代码的 C++ 文件
     include_dirs=[
         pybind11_include,
         os.path.expandvars("${ASCEND_HOME_PATH}/include"),
@@ -111,6 +162,11 @@ cinfer_ascendc = CppExtension(
         "-Wall",
         "-std=c++17",
         "-D_GLIBCXX_USE_CXX11_ABI=0",
+        (
+            "-DUSE_ASCEND_CLOSED=1"
+            if os.path.exists(closed_dir) and os.listdir(closed_dir)
+            else ""
+        ),
     ],
     extra_link_args=[
         f"-Wl,-rpath={os.path.expandvars(f'{site_packages_path}/vendors/customize/op_api/lib')}",
