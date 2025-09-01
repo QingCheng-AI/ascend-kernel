@@ -17,6 +17,10 @@ op_list_opened = ["grouped_gemm", "grouped_soft_gemv"]
 closed_dir = "ascend-closed"
 op_list_closed = ["grouped_query_attention"]
 
+enable_closed = os.path.exists(closed_dir) and os.path.exists(
+    closed_dir + "/" + op_list_closed[0]
+)
+
 # 检查必要的环境变量
 if "BASE_LIBS_PATH" not in os.environ:
     if "ASCEND_HOME_PATH" not in os.environ:
@@ -72,7 +76,7 @@ class CustomBuildExtension(BuildExtension):
                         ],
                         check=True,
                     )
-                if os.path.exists(closed_dir) and os.listdir(closed_dir):
+                if enable_closed:
                     for op in op_list_closed:
                         subprocess.run(
                             ["cp", "-r", f"{closed_dir}/{op}/{op}.json", tmp_dir],
@@ -136,10 +140,24 @@ def get_source_files():
     sources = ["pybind.cpp"]
     for op in op_list_opened:
         sources.append(f"{op}/src/{op}.cpp")
-    if os.path.exists(closed_dir) and os.listdir(closed_dir):
+    if enable_closed:
         for op in op_list_closed:
             sources.append(f"{closed_dir}/{op}/src/{op}.cpp")
     return sources
+
+
+def get_compile_args():
+    compile_args = [
+        "-fPIC",
+        "-O3",
+        "-g",
+        "-Wall",
+        "-std=c++17",
+        "-D_GLIBCXX_USE_CXX11_ABI=0",
+    ]
+    if enable_closed:
+        compile_args.append("-DUSE_ASCEND_CLOSED=1")
+    return compile_args
 
 
 # 定义扩展模块
@@ -158,19 +176,7 @@ cinfer_ascendc = CppExtension(
         f"{torch_npu_path}/include",
     ],  # 包含 pybind11 头文件
     language="c++",
-    extra_compile_args=[
-        "-fPIC",
-        "-O3",
-        "-g",
-        "-Wall",
-        "-std=c++17",
-        "-D_GLIBCXX_USE_CXX11_ABI=0",
-        (
-            "-DUSE_ASCEND_CLOSED=1"
-            if os.path.exists(closed_dir) and os.listdir(closed_dir)
-            else ""
-        ),
-    ],
+    extra_compile_args=get_compile_args(),
     extra_link_args=[
         f"-Wl,-rpath={os.path.expandvars(f'{site_packages_path}/vendors/customize/op_api/lib')}",
         # f"-Wl,-rpath={os.path.expandvars('${ASCEND_HOME_PATH}/opp/vendors/customize/op_api/lib')}",
