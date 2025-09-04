@@ -103,6 +103,7 @@ GMVTiling::PrepareTilingData(const gert::TilingContext *context) {
 }
 
 ge::graphStatus GMVTiling::CalGMVTiling(const gert::TilingContext *context) {
+    ubBaseM_ = MAX_BSZ;
     if (weightDtype_ == ge::DT_UINT8) {
         ubBaseN_ = BASEN_FP8;
         ubBaseK_ = BASEK_FP8;
