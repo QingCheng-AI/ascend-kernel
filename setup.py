@@ -51,7 +51,7 @@ class CustomBuildExtension(BuildExtension):
                             "-i",
                             f"{tmp_dir}/{op}.json",
                             "-c",
-                            "ai_core-Ascend910B2",
+                            "ai_core-Ascend910B,ai_core-Ascend910_93",
                             "-m",
                             f"{0 if first_op else 1}",
                             "-lan",
@@ -85,7 +85,7 @@ class CustomBuildExtension(BuildExtension):
                                 "-i",
                                 f"{tmp_dir}/{op}.json",
                                 "-c",
-                                "ai_core-Ascend910B2",
+                                "ai_core-Ascend910B,ai_core-Ascend910_93",
                                 "-m",
                                 f"{0 if first_op else 1}",
                                 "-lan",
@@ -111,7 +111,10 @@ class CustomBuildExtension(BuildExtension):
                 # 执行 build.sh
                 if os.path.exists("build.sh"):
                     subprocess.run(["bash", "build.sh"], check=True)
-
+                # 删除可能已经安装的算子包
+                subprocess.run(
+                    ["rm", "-rf", f"{site_packages_path}/vendors"], check=True
+                )
                 # 执行所有 .run 文件
                 run_files = glob.glob("./build_out/*.run")
                 for run_file in run_files:
