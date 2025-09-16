@@ -60,6 +60,7 @@ env_build_cinfer_ascendc:
         cp -r /workspace /tmp && \
         cd /tmp/workspace && \
         pip install . && \
+        python check_installed_ops.py && \
         cd grouped_gemm/test && \
         bash run_test.sh && 
         bash clean_test.sh && \

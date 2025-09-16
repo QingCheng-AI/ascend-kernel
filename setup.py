@@ -15,11 +15,9 @@ pybind11_include = pybind11.get_include()
 # 算子包所含算子列表
 op_list_opened = ["grouped_gemm", "grouped_soft_gemv"]
 closed_dir = "ascend-closed"
-op_list_closed = ["grouped_query_attention"]
+op_list_closed = ["grouped_query_attention", "incre_flash_attention"]
 
-enable_closed = os.path.exists(closed_dir) and os.path.exists(
-    closed_dir + "/" + op_list_closed[0]
-)
+enable_closed = os.path.exists(closed_dir)
 
 # 检查必要的环境变量
 if "BASE_LIBS_PATH" not in os.environ:
@@ -33,6 +31,8 @@ if "BASE_LIBS_PATH" not in os.environ:
 else:
     os.environ["ASCEND_HOME_PATH"] = os.environ["BASE_LIBS_PATH"]
 site_packages_path = site.getsitepackages()[0]
+
+installed_ops = []
 
 
 # 创建自定义的 BuildExtension 类
@@ -76,40 +76,47 @@ class CustomBuildExtension(BuildExtension):
                         ],
                         check=True,
                     )
+                    installed_ops.append(op)
                 if enable_closed:
                     for op in op_list_closed:
-                        subprocess.run(
-                            ["cp", "-r", f"{closed_dir}/{op}/{op}.json", tmp_dir],
-                            check=True,
-                        )
-                        subprocess.run(
-                            [
-                                "msopgen",
-                                "gen",
-                                "-i",
-                                f"{tmp_dir}/{op}.json",
-                                "-c",
-                                "ai_core-Ascend910B,ai_core-Ascend910_93",
-                                "-m",
-                                f"{0 if first_op else 1}",
-                                "-lan",
-                                "cpp",
-                                "-out",
-                                f"{tmp_dir}/cinfer_ascendc_autogen",
-                            ],
-                            check=True,
-                        )
-                        first_op = False
-                        subprocess.run(
-                            [
-                                "cp",
-                                "-r",
-                                f"{closed_dir}/{op}/op_host",
-                                f"{closed_dir}/{op}/op_kernel",
-                                f"{tmp_dir}/cinfer_ascendc_autogen",
-                            ],
-                            check=True,
-                        )
+                        if os.path.exists(closed_dir + "/" + op):
+                            subprocess.run(
+                                ["cp", "-r", f"{closed_dir}/{op}/{op}.json", tmp_dir],
+                                check=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "msopgen",
+                                    "gen",
+                                    "-i",
+                                    f"{tmp_dir}/{op}.json",
+                                    "-c",
+                                    "ai_core-Ascend910B,ai_core-Ascend910_93",
+                                    "-m",
+                                    f"{0 if first_op else 1}",
+                                    "-lan",
+                                    "cpp",
+                                    "-out",
+                                    f"{tmp_dir}/cinfer_ascendc_autogen",
+                                ],
+                                check=True,
+                            )
+                            first_op = False
+                            subprocess.run(
+                                [
+                                    "cp",
+                                    "-r",
+                                    f"{closed_dir}/{op}/op_host",
+                                    f"{closed_dir}/{op}/op_kernel",
+                                    f"{tmp_dir}/cinfer_ascendc_autogen",
+                                ],
+                                check=True,
+                            )
+                            installed_ops.append(op)
+                with open(".installed_ops.txt", "w") as file:
+                    for op in installed_ops:
+                        file.write(op + "\n")
+                file.close()
                 cur_dir = os.getcwd()
                 os.chdir(f"{tmp_dir}/cinfer_ascendc_autogen")
                 # 执行 build.sh
@@ -142,7 +149,8 @@ def get_source_files():
         sources.append(f"{op}/src/{op}.cpp")
     if enable_closed:
         for op in op_list_closed:
-            sources.append(f"{closed_dir}/{op}/src/{op}.cpp")
+            if os.path.exists(closed_dir + "/" + op):
+                sources.append(f"{closed_dir}/{op}/src/{op}.cpp")
     return sources
 
 
@@ -156,7 +164,9 @@ def get_compile_args():
         "-D_GLIBCXX_USE_CXX11_ABI=0",
     ]
     if enable_closed:
-        compile_args.append("-DUSE_ASCEND_CLOSED=1")
+        for op in op_list_closed:
+            if os.path.exists(closed_dir + "/" + op):
+                compile_args.append(f"-DENABLE_{op.upper()}=1")
     return compile_args
 
 

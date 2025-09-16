@@ -93,6 +93,7 @@ dumps/
 kernel_meta/
 fusion_result.json
 *.pt
+.installed_ops.txt
 # Vim
 .*.swp
 
