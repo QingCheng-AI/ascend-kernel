@@ -134,7 +134,16 @@ class CustomBuildExtension(BuildExtension):
                         ["bash", run_file, f"--install-path={site_packages_path}"],
                         check=True,
                     )
+                subprocess.run(
+                    [
+                        "rm",
+                        "-rf",
+                        f"{site_packages_path}/vendors/customize/op_impl/ai_core/tbe/customize_impl",
+                    ],
+                    check=True,
+                )
                 os.chdir(cur_dir)
+                subprocess.run(["rm", "-rf", tmp_dir], check=True)
             except subprocess.CalledProcessError as e:
                 print(f"执行脚本时出错: {e}")
                 raise
