@@ -12,7 +12,7 @@ namespace grouped_soft_gemv {
     do {                                                                       \
         if (!(cond)) {                                                         \
             return_expr;                                                       \
-            exit(1);                                                           \
+            throw std::runtime_error("Host tiling failed!");                   \
         }                                                                      \
     } while (0)
 

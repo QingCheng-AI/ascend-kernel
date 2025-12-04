@@ -26,8 +26,9 @@ PYBIND11_MODULE(cinfer_ascendc, m) {
 #ifdef ENABLE_INCRE_FLASH_ATTENTION
     m.def("incre_flash_attention", &incre_flash_attention::IncreFlashAttention,
           "query"_a, "key"_a, "value"_a, "seqLen"_a, "maxSeqLen"_a,
-          "startIdxEachCore"_a, "attentionOut"_a, "numHeads"_a, "scale"_a,
-          "layout"_a, "kvnumHeads"_a, "INCRE FLASH ATTENTION.");
+          "startIdxEachCore"_a, "attenMask"_a, "attentionOut"_a, "batch"_a,
+          "numHeads"_a, "scale"_a, "layout"_a, "kvNumHeads"_a,
+          "INCRE FLASH ATTENTION.");
 #endif
 }
 } // namespace cinfer_ascendc
